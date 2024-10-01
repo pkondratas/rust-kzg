@@ -7,9 +7,17 @@
  *
  * @remark The output format is big-endian.
  */
-fn bytes_from_u64(out: &mut [u8], mut n: u64) { //maybe &mut[u8;8]?
-    for i in (0..8).rev() {
-        out[i] = (n & 0xFF) as u8;
+// Written by me
+ // fn bytes_of_uint64(out: &mut [u8], mut n: u64) { //maybe &mut[u8;8]?
+//     for i in (0..8).rev() {
+//         out[i] = (n & 0xFF) as u8;
+//         n >>= 8;
+//     }
+// }
+// Written by Artiom
+pub fn bytes_of_uint64(out: &mut [u8], mut n: u64) {
+    for byte in out.iter_mut().rev().take(8) {
+        *byte = (n & 0xff) as u8;
         n >>= 8;
     }
 }
@@ -78,15 +86,15 @@ fn compute_r_powers_for_verify_cell_kzg_proof_batch(
         offset += DOMAIN_STR_LENGTH;
 
         /* Copy field elements per cell */
-        bytes_from_u64(&mut bytes[offset..], FIELD_ELEMENTS_PER_CELL);
+        bytes_of_uint64(&mut bytes[offset..], FIELD_ELEMENTS_PER_CELL);
         offset += std::mem::size_of::<u64>();
 
         /* Copy number of commitments */
-        bytes_from_u64(&mut bytes[offset..], num_commitments as u64);
+        bytes_of_uint64(&mut bytes[offset..], num_commitments as u64);
         offset += std::mem::size_of::<u64>();
 
         /* Copy number of cells */
-        bytes_from_u64(&mut bytes[offset..], num_cells as u64);
+        bytes_of_uint64(&mut bytes[offset..], num_cells as u64);
         offset += std::mem::size_of::<u64>();
 
         for commitment in commitments_bytes.iter().take(num_commitments) {
@@ -104,11 +112,11 @@ fn compute_r_powers_for_verify_cell_kzg_proof_batch(
         
         for i in 0..num_cells as usize {
             /* Copy row id */
-            bytes_from_u64(&mut bytes[offset..], commitment_indices[i]);
+            bytes_of_uint64(&mut bytes[offset..], commitment_indices[i]);
             offset += std::mem::size_of::<u64>();
 
             /* Copy column id */
-            bytes_from_u64(&mut bytes[offset..], cell_indices[i]);
+            bytes_of_uint64(&mut bytes[offset..], cell_indices[i]);
             offset += std::mem::size_of::<u64>();
 
             /* Copy cell */
