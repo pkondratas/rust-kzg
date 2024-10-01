@@ -1,0 +1,6 @@
+extern crate alloc;
+
+pub const FIELD_ELEMENTS_PER_CELL: usize = 64;
+pub const FIELD_ELEMENTS_PER_BLOB: usize = 4096;
+pub const FIELD_ELEMENTS_PER_EXT_BLOB: usize = FIELD_ELEMENTS_PER_BLOB * 2;
+pub const CELLS_PER_EXT_BLOB: usize = FIELD_ELEMENTS_PER_EXT_BLOB / FIELD_ELEMENTS_PER_CELL;
