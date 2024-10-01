@@ -1,8 +1,16 @@
 use crate::kzg_proofs::KZGSettings;
 use crate::kzg_types::{Fr, G1, C_KZG_RET};
 use zkcrypto::constants;
+use zkcrypto::bytes::bytes_to_bls_field;
 use kzg::eip_4844::BYTES_PER_FIELD_ELEMENT;
+use ckzg::finite::{blst_fr_mul, blst_fr_add};
 
+// remaining helper functions
+// bit_reversal_permutation
+// fr_ifft
+// get_inv_coset_shift_for_cell
+// shift_poly
+// g1_lincomb_fast
 fn compute_commitment_to_aggregated_interpolation_poly(
     commitment_out: &mut G1,
     r_powers: &[Fr],
