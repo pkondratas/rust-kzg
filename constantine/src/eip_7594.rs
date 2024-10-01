@@ -7,13 +7,15 @@
  *
  * @remark The output format is big-endian.
  */
+
 // Written by me
- // fn bytes_of_uint64(out: &mut [u8], mut n: u64) { //maybe &mut[u8;8]?
+// fn bytes_of_uint64(out: &mut [u8], mut n: u64) { //maybe &mut[u8;8]?
 //     for i in (0..8).rev() {
 //         out[i] = (n & 0xFF) as u8;
 //         n >>= 8;
 //     }
 // }
+
 // Written by Artiom
 pub fn bytes_of_uint64(out: &mut [u8], mut n: u64) {
     for byte in out.iter_mut().rev().take(8) {
@@ -36,7 +38,7 @@ pub fn bytes_of_uint64(out: &mut [u8], mut n: u64) {
  * @param[in]   num_cells           The number of cells
  */
 fn compute_r_powers_for_verify_cell_kzg_proof_batch(
-    r_powers_out: &mut [fr_t],
+    r_powers_out: &mut [ZFr], // TFr?????
     commitments_bytes: &[Bytes48],
     num_commitments: usize,
     commitment_indices: &[u64],
@@ -48,10 +50,10 @@ fn compute_r_powers_for_verify_cell_kzg_proof_batch(
     let mut ret: C_KZG_RET;
     let mut bytes: Vec<u8> = Vec::new(); // Vec::new(); is the same as vec![];
     let mut r_bytes: Bytes32;
-    let mut r: fr_t; // what is this fr_t????????
+    let mut r: ZFr; // maybe TFr????
 
     /* Calculate the size of the data we're going to hash */
-    let input_size: usize = DOMAIN_STR_LENGTH                         /* The domain separator */ 
+    let input_size: usize = DOMAIN_STR_LENGTH                  /* The domain separator */ 
     + std::mem::size_of::<u64>()                               /* FIELD_ELEMENTS_PER_CELL */
     + std::mem::size_of::<u64>()                               /* num_commitments */
     + std::mem::size_of::<u64>()                               /* num_cells */
@@ -128,12 +130,15 @@ fn compute_r_powers_for_verify_cell_kzg_proof_batch(
         offset += BYTES_PER_PROOF;
     }
 
-    /* Now let's create the challenge! */
-    blst_sha256(&mut r_bytes.bytes, &bytes, input_size);
-    hash_to_bls_field(&mut r, &r_bytes);
-
-    /* Raise power of r for each cell */
-    compute_powers(r_powers_out, &r, num_cells as usize);
+    // /* Now let's create the challenge! */
+    // blst_sha256(&mut r_bytes.bytes, &bytes, input_size);
+    // hash_to_bls_field(&mut r, &r_bytes);
+    // /* Raise power of r for each cell */
+    // compute_powers(r_powers_out, &r, num_cells as usize);
+    
+    let r_bytes_ = hash(&bytes); // maybe r_bytes.bytes is now the way it should be assigned
+    r = hash_to_bls_field(&r_bytes_);
+    r_powers_out = compute_powers(&r, num_cells as usize);
 
     /* Make sure we wrote the entire buffer */
     assert_eq!(offset, input_size);
