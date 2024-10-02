@@ -1,4 +1,4 @@
-use kzg:: { eip_4844::{ compute_powers, FIELD_ELEMENTS_PER_CELL, FIELD_ELEMENTS_PER_EXT_BLOB, BYTES_PER_COMMITMENT, CELLS_PER_EXT_BLOB, RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN, BYTES_PER_CELL, BYTES_PER_PROOF, hash, hash_to_bls_field }, Fr, G1, G2, common_utils::reverse_bit_order };
+use kzg:: { eip_4844::{ compute_powers, FIELD_ELEMENTS_PER_CELL, FIELD_ELEMENTS_PER_EXT_BLOB, BYTES_PER_COMMITMENT, CELLS_PER_EXT_BLOB, RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN, BYTES_PER_CELL, BYTES_PER_PROOF, hash, hash_to_bls_field }, Fr, G1, G2, common_utils::{reverse_bit_order, is_power_of_2} };
 use crate::{kzg_proofs::{KZGSettings, pairings_verify, FFTSettings}, kzg_types::{ZFr, ZG1, ZG2}, fft_g1::g1_linear_combination, fft::fft_fr_fast};
 
 static CELL_INDICES_RBL: [usize; CELLS_PER_EXT_BLOB] = [
@@ -100,8 +100,16 @@ pub fn verify_cell_kzg_proof_batch(
     ))
 }
 
-fn fr_ifft(output: &mut [ZFr], input: &[ZFr], s: &FFTSettings) -> Result<(), String> {
-    let stride = FIELD_ELEMENTS_PER_EXT_BLOB / input.len();
+fn fr_ifft(output: &mut [ZFr], input: &[ZFr], n: usize, s: &FFTSettings) -> Result<(), String> {
+    if n == 0 {
+        return Ok(());
+    }
+
+    if n > FIELD_ELEMENTS_PER_EXT_BLOB || !is_power_of_2(n) {
+        return Err(String::from("Bad arguments"));
+    }
+
+    let stride = FIELD_ELEMENTS_PER_EXT_BLOB / n;
 
     fft_fr_fast(output, &input, 1, &s.reverse_roots_of_unity, stride);
 
@@ -154,6 +162,7 @@ fn compute_commitment_to_aggregated_interpolation_poly(
         fr_ifft(
             &mut column_interpolation_poly,
             &aggregated_column_cells[index..(index + FIELD_ELEMENTS_PER_CELL)],
+            FIELD_ELEMENTS_PER_CELL,
             &s.fs,
         )?;
 
