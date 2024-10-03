@@ -34,6 +34,7 @@ pub const FIELD_ELEMENTS_PER_BLOB: usize = 4096;
 pub const BYTES_PER_G1: usize = 48;
 pub const BYTES_PER_G2: usize = 96;
 pub const BYTES_PER_BLOB: usize = BYTES_PER_FIELD_ELEMENT * FIELD_ELEMENTS_PER_BLOB;
+pub const BITS_PER_FIELD_ELEMENT: usize = 255;
 pub const BYTES_PER_FIELD_ELEMENT: usize = 32;
 pub const BYTES_PER_PROOF: usize = 48;
 pub const BYTES_PER_COMMITMENT: usize = 48;
@@ -56,6 +57,13 @@ pub const FIAT_SHAMIR_PROTOCOL_DOMAIN: [u8; 16] = [
 pub const RANDOM_CHALLENGE_KZG_BATCH_DOMAIN: [u8; 16] = [
     82, 67, 75, 90, 71, 66, 65, 84, 67, 72, 95, 95, 95, 86, 49, 95,
 ]; // "RCKZGBATCH___V1_"
+
+////////////////////////////// Constant values for EIP-7594 //////////////////////////////
+pub const FIELD_ELEMENTS_PER_EXT_BLOB: usize = 2 * FIELD_ELEMENTS_PER_BLOB;
+pub const FIELD_ELEMENTS_PER_CELL: usize = 64;
+pub const BYTES_PER_CELL: usize = FIELD_ELEMENTS_PER_CELL * BYTES_PER_FIELD_ELEMENT;
+pub const CELLS_PER_EXT_BLOB: usize = FIELD_ELEMENTS_PER_EXT_BLOB / FIELD_ELEMENTS_PER_CELL;
+pub const RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN: [u8; 16] = *b"RCKZGCBATCH__V1_";
 
 ////////////////////////////// C API for EIP-4844 //////////////////////////////
 
