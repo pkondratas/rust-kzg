@@ -28,9 +28,9 @@ pub struct FsKZGSettings {
 
 impl KZGSettings<FsFr, FsG1, FsG2, FsFFTSettings, FsPoly, FsFp, FsG1Affine> for FsKZGSettings {
     fn new(
-        secret_g1: &[FsG1],
-        secret_g2: &[FsG2],
-        _length: usize,
+        g1_monomial: &[FsG1],
+        g1_lagrange_brp: &[FsG1],
+        g2_monomial: &[FsG2],
         fft_settings: &FsFFTSettings,
     ) -> Result<Self, String> {
         Ok(Self {

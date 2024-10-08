@@ -5,3 +5,4 @@ pub mod verify_blob_kzg_proof;
 pub mod verify_blob_kzg_proof_batch;
 pub mod verify_kzg_proof;
 pub mod verify_cell_kzg_proof_batch;
+pub mod recover_cells_and_kzg_proofs;

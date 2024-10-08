@@ -1,5 +1,5 @@
-use kzg:: { eip_4844::{ compute_powers, FIELD_ELEMENTS_PER_CELL, FIELD_ELEMENTS_PER_EXT_BLOB, BYTES_PER_COMMITMENT, CELLS_PER_EXT_BLOB, RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN, BYTES_PER_CELL, BYTES_PER_PROOF, hash, hash_to_bls_field }, Fr, G1, G2, common_utils::{reverse_bit_order, is_power_of_2} };
-use crate::{kzg_proofs::{KZGSettings, pairings_verify, FFTSettings}, kzg_types::{ZFr, ZG1, ZG2}, fft_g1::g1_linear_combination, fft::fft_fr_fast};
+use kzg:: { eip_4844::{ compute_powers, FIELD_ELEMENTS_PER_CELL, FIELD_ELEMENTS_PER_EXT_BLOB, BYTES_PER_COMMITMENT, CELLS_PER_EXT_BLOB, RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN, BYTES_PER_CELL, BYTES_PER_PROOF, hash, hash_to_bls_field, FIELD_ELEMENTS_PER_BLOB }, Fr, G1, G2, common_utils::{reverse_bit_order, reverse_bits_limited}, G1Mul };
+use crate::{kzg_proofs::{KZGSettings, pairings_verify, FFTSettings}, kzg_types::{ZFr, ZG1, ZG2}, fft_g1::{g1_linear_combination, fft_g1_fast}, fft::fft_fr_fast};
 
 static CELL_INDICES_RBL: [usize; CELLS_PER_EXT_BLOB] = [
     0x00, 0x40, 0x20, 0x60, 0x10, 0x50, 0x30, 0x70, 0x08, 0x48, 0x28, 0x68, 0x18, 0x58, 0x38, 0x78,
@@ -11,6 +11,366 @@ static CELL_INDICES_RBL: [usize; CELLS_PER_EXT_BLOB] = [
     0x03, 0x43, 0x23, 0x63, 0x13, 0x53, 0x33, 0x73, 0x0b, 0x4b, 0x2b, 0x6b, 0x1b, 0x5b, 0x3b, 0x7b,
     0x07, 0x47, 0x27, 0x67, 0x17, 0x57, 0x37, 0x77, 0x0f, 0x4f, 0x2f, 0x6f, 0x1f, 0x5f, 0x3f, 0x7f,
 ];
+
+pub fn recover_cells_and_kzg_proofs(
+    recovered_cells: &mut [[ZFr; FIELD_ELEMENTS_PER_CELL]],
+    recovered_proofs: Option<&mut [ZG1]>,
+    cell_indices: &[usize],
+    cells: &[[ZFr; FIELD_ELEMENTS_PER_CELL]],
+    s: &KZGSettings
+) -> Result<(), String> {
+    if cells.len() > CELLS_PER_EXT_BLOB {
+        return Err(String::from("Cell length cannot be larger than CELLS_PER_EXT_BLOB"))
+    }
+
+    if cells.len() != cell_indices.len() {
+        return Err(
+            "Cell indicies mismatch - cells length must be equal to cell indicies length"
+                .to_string(),
+        );
+    }
+
+    if cells.len() < CELLS_PER_EXT_BLOB / 2 {
+        return Err(String::from("Impossible to recover - cells length cannot be less than CELLS_PER_EXT_BLOB / 2"));
+    }
+
+    for cell_index in cell_indices {
+        if *cell_index >= CELLS_PER_EXT_BLOB {
+            return Err(String::from("Cell index cannot be larger than CELLS_PER_EXT_BLOB"));
+        }
+    }
+
+    for cell in recovered_cells.iter_mut() {
+        for fr in cell {
+            *fr = ZFr::null();
+        }
+    }
+    // ERROR
+    for i in 0..cells.len() {
+        let index = cell_indices[i]; // * FIELD_ELEMENTS_PER_CELL;
+        for j in 0..FIELD_ELEMENTS_PER_CELL {
+            if !recovered_cells[index][j].is_null() {
+                return Err(String::from("Invalid output cell"));
+            }
+        }
+
+        recovered_cells[index] = cells[i];
+    }
+
+    if cells.len() != CELLS_PER_EXT_BLOB {
+        recover_cells(recovered_cells.as_flattened_mut(), cell_indices, s)?;
+    }
+    
+    if let Some(recovered_proofs) = recovered_proofs {
+        let mut poly = vec![ZFr::default(); FIELD_ELEMENTS_PER_EXT_BLOB];
+
+        poly_lagrange_to_monomial(&mut poly, recovered_cells.as_flattened(), &s.fs)?;
+
+        compute_fk20_proofs(recovered_proofs, &poly, FIELD_ELEMENTS_PER_BLOB, s)?;
+    
+        reverse_bit_order(recovered_proofs)?;
+    }
+
+    return Ok(());
+}
+
+fn compute_fk20_proofs(
+    proofs: &mut [ZG1],
+    poly: &[ZFr],
+    n: usize,
+    s: &KZGSettings,
+) -> Result<(), String> {
+    let k = n / FIELD_ELEMENTS_PER_CELL;
+    let k2 = k * 2;
+
+    let mut coeffs = vec![vec![ZFr::default(); k]; k2];
+    let mut h_ext_fft = vec![ZG1::identity(); k2];
+    let mut toeplitz_coeffs = vec![ZFr::default(); k2];
+    let mut toeplitz_coeffs_fft = vec![ZFr::default(); k2];
+
+    for i in 0..FIELD_ELEMENTS_PER_CELL {
+        toeplitz_coeffs_stride(&mut toeplitz_coeffs, poly, n, i, FIELD_ELEMENTS_PER_CELL)?;
+        fr_fft(&mut toeplitz_coeffs_fft, &toeplitz_coeffs, &s.fs)?;
+        for j in 0..k2 {
+            coeffs[j][i] = toeplitz_coeffs_fft[j];
+        }
+    }
+
+    for i in 0..k2 {
+        g1_linear_combination(
+            &mut h_ext_fft[i],
+            &s.x_ext_fft_columns[i],
+            &coeffs[i],
+            FIELD_ELEMENTS_PER_CELL,
+            None,
+        );
+    }
+
+    let mut h = vec![ZG1::identity(); k2];
+    g1_ifft(&mut h, &h_ext_fft, s, &k2)?;
+
+    for i in k..k2 {
+        h[i] = ZG1::identity();
+    }
+
+    g1_fft(proofs, &h, s, &k2)?;
+
+    Ok(())
+}
+
+fn g1_fft(
+    out: &mut [ZG1], 
+    input: &[ZG1], 
+    s: &KZGSettings, 
+    k2: &usize
+) -> Result<(), String> {
+    if input.len() > FIELD_ELEMENTS_PER_EXT_BLOB || !input.len().is_power_of_two() {
+        return Err("Invalid input length".to_string());
+    }
+
+    let roots_stride = FIELD_ELEMENTS_PER_EXT_BLOB / input.len();
+    fft_g1_fast(out, input, 1, &s.fs.roots_of_unity, roots_stride, *k2);
+
+    Ok(())
+}
+
+fn g1_ifft(
+    out: &mut [ZG1], 
+    input: &[ZG1],
+    s: &KZGSettings,
+    k2: &usize,
+) -> Result<(), String> {
+    if input.len() > FIELD_ELEMENTS_PER_EXT_BLOB || !input.len().is_power_of_two() {
+        return Err("Invalid input length".to_string());
+    }
+
+    let stride = FIELD_ELEMENTS_PER_EXT_BLOB / input.len();
+    fft_g1_fast(out, &input, 1, &s.fs.reverse_roots_of_unity, stride, *k2);
+
+    let inv_len = ZFr::from_u64(input.len() as u64).eucl_inverse();
+    for i in 0..input.len() {
+        out[i] = out[i].mul(&inv_len);
+    }
+
+    Ok(())
+}
+
+fn toeplitz_coeffs_stride(
+    out: &mut [ZFr],
+    input: &[ZFr],
+    n: usize,
+    offset: usize,
+    stride: usize,
+) -> Result<(), String> {
+    if stride == 0 {
+        return Err(String::from("Stride cannot be zero"));
+    }
+
+    let k = n / stride;
+    let k2 = k * 2;
+
+    out[0] = input[n - 1 - offset];
+    {
+        let mut i = 1;
+        while i <= k + 1 && i < k2 {
+            out[i] = ZFr::zero();
+            i += 1;
+        }
+    };
+
+    {
+        let mut i = k + 2;
+        let mut j = 2 * stride - offset - 1;
+        while i < k2 {
+            out[i] = input[j];
+            i += 1;
+            j += stride;
+        }
+    };
+
+    Ok(())
+}
+
+fn poly_lagrange_to_monomial(
+    output: &mut [ZFr],
+    lagrange_poly: &[ZFr],
+    s: &FFTSettings,
+) -> Result<(), String> {
+    let mut poly = lagrange_poly.to_vec();
+
+    reverse_bit_order(&mut poly)?;
+
+    fr_ifft(output, &poly, s)?;
+
+    Ok(())
+}
+
+fn recover_cells(
+    output: &mut [ZFr],
+    cell_indices: &[usize],
+    s: &KZGSettings,
+) -> Result<(), String> {
+    let mut missing_cell_indices: Vec<usize> = Vec::new();
+
+    let mut cells_brp = output.to_vec();
+    reverse_bit_order(&mut cells_brp)?;
+
+    for i in 0..CELLS_PER_EXT_BLOB {
+        if !cell_indices.contains(&i) {
+            missing_cell_indices.push(reverse_bits_limited(CELLS_PER_EXT_BLOB, i));
+        }
+    }
+
+    if missing_cell_indices.len() > CELLS_PER_EXT_BLOB / 2 {
+        return Err(String::from("Not enough cells"));
+    }
+
+    let missing_cell_indices = &missing_cell_indices[..];
+    let vanishing_poly_coeff = vanishing_polynomial_for_missing_cells(missing_cell_indices, s)?;
+
+    let mut vanishing_poly_eval = vec![ZFr::default(); FIELD_ELEMENTS_PER_EXT_BLOB];
+
+    fr_fft(&mut vanishing_poly_eval, &vanishing_poly_coeff, &s.fs)?;
+
+    let mut extended_evaluation_times_zero: Vec<ZFr> = Vec::with_capacity(FIELD_ELEMENTS_PER_EXT_BLOB);
+
+    for i in 0..FIELD_ELEMENTS_PER_EXT_BLOB {
+        if cells_brp[i].is_null() {
+            extended_evaluation_times_zero.push(ZFr::zero());
+        } else {
+            extended_evaluation_times_zero.push(cells_brp[i].mul(&vanishing_poly_eval[i]));
+        }
+    }
+
+    let mut extended_evaluation_times_zero_coeffs = vec![ZFr::default(); FIELD_ELEMENTS_PER_EXT_BLOB];
+
+    fr_ifft(&mut extended_evaluation_times_zero_coeffs, &extended_evaluation_times_zero, &s.fs)?;
+
+    let mut extended_evaluations_over_coset = coset_fft(&extended_evaluation_times_zero_coeffs, &s)?;
+
+    let vanishing_poly_over_coset = coset_fft(&vanishing_poly_coeff, &s)?;
+
+    for i in 0..FIELD_ELEMENTS_PER_EXT_BLOB {
+        extended_evaluations_over_coset[i] = extended_evaluations_over_coset[i].div(&vanishing_poly_over_coset[i])?;
+    }
+
+    let reconstructed_poly_coeff = coset_ifft(&extended_evaluations_over_coset, s)?;
+
+    fr_fft(output, &reconstructed_poly_coeff, &s.fs)?;
+
+    reverse_bit_order(output)?;
+
+    return Ok(())
+}
+
+fn coset_ifft(input: &[ZFr], s: &KZGSettings) -> Result<Vec<ZFr>, String> {
+    if input.len() == 0 {
+        return Err("Invalid input length".to_string());
+    }
+
+    let mut output = vec![ZFr::default(); input.len()];
+    fr_ifft(&mut output, input, &s.fs)?;
+
+    shift_poly(&mut output, &ZFr::one().div(&ZFr::from_u64(7))?);
+
+    Ok(output)
+}
+
+fn coset_fft(input: &[ZFr], s: &KZGSettings) -> Result<Vec<ZFr>, String> {
+    if input.len() == 0 {
+        return Err("Invalid input length".to_string());
+    }
+
+    let mut in_shifted = input.to_vec();
+    // TODO: move 7 to constant
+    shift_poly(&mut in_shifted, &ZFr::from_u64(7));
+
+    let mut output = vec![ZFr::default(); input.len()];
+    fr_fft(&mut output, &in_shifted, &s.fs)?;
+
+    Ok(output)
+}
+
+fn fr_ifft(output: &mut [ZFr], input: &[ZFr], s: &FFTSettings) -> Result<(), String> {
+    let stride = FIELD_ELEMENTS_PER_EXT_BLOB / input.len();
+
+    fft_fr_fast(output, &input, 1, &s.reverse_roots_of_unity, stride);
+
+    let inv_len = ZFr::from_u64(input.len().try_into().unwrap()).inverse();
+    for el in output {
+        *el = el.mul(&inv_len);
+    }
+
+    Ok(())
+}
+
+
+fn fr_fft(output: &mut [ZFr], input: &[ZFr], s: &FFTSettings) -> Result<(), String> {
+    let roots_stride = FIELD_ELEMENTS_PER_EXT_BLOB / input.len();
+    fft_fr_fast(output, &input, 1, &s.roots_of_unity, roots_stride);
+
+    Ok(())
+}
+
+
+pub fn vanishing_polynomial_for_missing_cells(
+    missing_cell_indices: &[usize],
+    s: &KZGSettings,
+) -> Result<Vec<ZFr>, String> {
+    if missing_cell_indices.len() == 0 || missing_cell_indices.len() >= CELLS_PER_EXT_BLOB {
+        return Err(String::from("Invalid missing cell indices count"));
+    }
+
+    const STRIDE: usize = FIELD_ELEMENTS_PER_EXT_BLOB / CELLS_PER_EXT_BLOB;
+
+    // let roots = missing_cell_indices
+    //     .iter()
+    //     .map(|i| s.fs.roots_of_unity[*i * STRIDE])
+    //     .collect::<Vec<_>>();
+
+    let mut roots = Vec::new();
+    for i in missing_cell_indices {
+        let a = *i;
+        let b = *i * STRIDE;
+        roots.push(s.fs.roots_of_unity[*i * STRIDE]);
+    }
+
+    let short_vanishing_poly = compute_vanishing_polynomial_from_roots(&roots)?;
+
+    let mut vanishing_poly = vec![ZFr::zero(); FIELD_ELEMENTS_PER_EXT_BLOB];
+    
+    for i in 0..short_vanishing_poly.len() {
+        vanishing_poly[i * FIELD_ELEMENTS_PER_CELL] = short_vanishing_poly[i];
+    }
+
+    Ok(vanishing_poly)
+}   
+
+fn compute_vanishing_polynomial_from_roots(
+    roots: &[ZFr],
+) -> Result<Vec<ZFr>, String> {
+    if roots.len() == 0 {
+        return Err(String::from("Roots cannot be empty"));
+    }
+
+    let mut poly = Vec::new();
+    poly.push(roots[0].negate());
+
+    for i in 1..roots.len() {
+        let neg_root = roots[i].negate();
+
+        poly.push(neg_root.add(&poly[i - 1]));
+
+        for j in (1..i).rev() {
+            poly[j] = poly[j].mul(&neg_root).add(&poly[j - 1]);
+        }
+        poly[0] = poly[0].mul(&neg_root);
+    }
+
+    poly.push(ZFr::one());
+
+    Ok(poly)    
+}
 
 pub fn verify_cell_kzg_proof_batch(
     commitments_bytes: &[ZG1],
@@ -90,7 +450,7 @@ pub fn verify_cell_kzg_proof_batch(
 
     let final_g1_sum = final_g1_sum.add(&weighted_sum_of_proofs);
 
-    let power_of_s = &s.secret_g2[FIELD_ELEMENTS_PER_CELL];
+    let power_of_s = &s.g2_values_monomial[FIELD_ELEMENTS_PER_CELL];
     
     Ok(pairings_verify(
         &final_g1_sum,
@@ -100,26 +460,26 @@ pub fn verify_cell_kzg_proof_batch(
     ))
 }
 
-fn fr_ifft(output: &mut [ZFr], input: &[ZFr], n: usize, s: &FFTSettings) -> Result<(), String> {
-    if n == 0 {
-        return Ok(());
-    }
+// fn fr_ifft(output: &mut [ZFr], input: &[ZFr], n: usize, s: &FFTSettings) -> Result<(), String> {
+//     if n == 0 {
+//         return Ok(());
+//     }
 
-    if n > FIELD_ELEMENTS_PER_EXT_BLOB || !is_power_of_2(n) {
-        return Err(String::from("Bad arguments"));
-    }
+//     if n > FIELD_ELEMENTS_PER_EXT_BLOB || !is_power_of_2(n) {
+//         return Err(String::from("Bad arguments"));
+//     }
 
-    let stride = FIELD_ELEMENTS_PER_EXT_BLOB / n;
+//     let stride = FIELD_ELEMENTS_PER_EXT_BLOB / n;
 
-    fft_fr_fast(output, &input, 1, &s.reverse_roots_of_unity, stride);
+//     fft_fr_fast(output, &input, 1, &s.reverse_roots_of_unity, stride);
 
-    let inv_len = ZFr::from_u64(input.len().try_into().unwrap()).inverse();
-    for el in output {
-        *el = el.mul(&inv_len);
-    }
+//     let inv_len = ZFr::from_u64(input.len().try_into().unwrap()).inverse();
+//     for el in output {
+//         *el = el.mul(&inv_len);
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn compute_commitment_to_aggregated_interpolation_poly(
     r_powers: &[ZFr],
@@ -162,7 +522,6 @@ fn compute_commitment_to_aggregated_interpolation_poly(
         fr_ifft(
             &mut column_interpolation_poly,
             &aggregated_column_cells[index..(index + FIELD_ELEMENTS_PER_CELL)],
-            FIELD_ELEMENTS_PER_CELL,
             &s.fs,
         )?;
 
@@ -179,7 +538,7 @@ fn compute_commitment_to_aggregated_interpolation_poly(
     let mut commitment_out = ZG1::default();
     g1_linear_combination(
         &mut commitment_out,
-        &s.secret_g1,
+        &s.g1_values_monomial,
         &aggregated_interpolation_poly,
         FIELD_ELEMENTS_PER_CELL,
         None,
