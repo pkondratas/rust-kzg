@@ -42,9 +42,9 @@ pub fn test_vectors_recover_cells_and_kzg_proofs<
     assert!(!test_files.is_empty());
 
     for test_file in test_files {
-        if !test_file.parent().unwrap().file_name().unwrap().to_str().unwrap().starts_with("recover_cells_and_kzg_proofs_case_valid_half_missing_second_half_dc1250b6f5996f1c") {
-            continue; // Remove this line in order to not skip through these vectors
-        }
+        // if !test_file.parent().unwrap().file_name().unwrap().to_str().unwrap().starts_with("recover_cells_and_kzg_proofs_case_valid_half_missing_second_half_dc1250b6f5996f1c") {
+        //     continue; // Remove this line in order to not skip through these vectors
+        // }
         let yaml_data = fs::read_to_string(test_file.clone()).unwrap();
         let test: recover_cells_and_kzg_proofs::Test = serde_yaml::from_str(&yaml_data).unwrap();
 
